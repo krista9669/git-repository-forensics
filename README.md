@@ -17,7 +17,12 @@ A database-driven platform that mines Git history and turns it into actionable i
 - **Who should review this:** a Neo4j graph suggests reviewers from coupled files and finds knowledge silos and collaboration pairs.
 - **Find commits:** PostgreSQL full-text search, and pgvector similarity search over commit messages.
 
-It was built as a DBMS project. PostgreSQL is the authoritative store, and most of the logic lives in the schema: constraints, triggers, views, a materialised view, a SQL function, and full-text and vector indexes. See [docs/database-design.md](docs/database-design.md).
+- **Team analytics:** core contributors (at least the average number of commits) and shared files (changed by many developers), both with `GROUP BY … HAVING`.
+
+It was built as a DBMS project. PostgreSQL is the authoritative store, and most of the logic lives in the schema: constraints, triggers, views, a materialised view, a SQL function, a stored procedure, and full-text and vector indexes.
+
+- **Project report** (problem statement, ER diagram, relational schema, data dictionary, queries, screenshots, test results): [docs/project-report.md](docs/project-report.md)
+- **Database design notes:** [docs/database-design.md](docs/database-design.md)
 
 ## Architecture
 
@@ -136,7 +141,7 @@ All endpoints need a session cookie, except login and registration. Mutating req
 | `GET /api/repositories` · `POST /api/repositories` | List / register (`{name, sourceType, source, branch?}`) |
 | `GET /api/repositories/:id` · `DELETE …` | Details, summary and jobs / delete (owner or admin) |
 | `POST /api/repositories/:id/analyze` | Queue a re-analysis (409 if one is already active) |
-| `GET /api/repositories/:id/report?kind=…` | `summary`, `monthly`, `developers`, `hotspots`, `coupling&minJaccard=`, `commits&q=`, `similar&q=`, `collaboration`, `silos` |
+| `GET /api/repositories/:id/report?kind=…` | `summary`, `monthly`, `developers`, `hotspots`, `coupling&minJaccard=`, `shared&minAuthors=`, `core`, `commits&q=`, `similar&q=`, `collaboration`, `silos` |
 | `GET /api/jobs/:id` · `POST /api/jobs/:id/cancel` | Status with live progress / cancel |
 | `PATCH /api/admin/users/:id` | Admin: `{role?, isActive?}` |
 
@@ -152,7 +157,7 @@ All endpoints need a session cookie, except login and registration. Mutating req
 ```
 app/                Next.js pages and API route handlers
 components/         Client components (forms, job progress, charts)
-db/migrations/      SQL schema
+db/migrations/      SQL schema (001) and schema changes (002: ALTER / DROP)
 lib/                db, redis, neo4j clients · auth · queries · validation
 lib/git/            git runner and output parsers
 lib/analysis/       pipeline, change-coupling and embedding algorithms
@@ -160,6 +165,6 @@ lib/graph/          Neo4j projection
 workers/            analysis worker
 scripts/            migrate, reset, seed, neo4j-init, fixture repository
 tests/              unit and integration tests
-docs/               database design
+docs/               project report, database design, screenshots
 Makefile            one-command setup and run (`make`)
 ```

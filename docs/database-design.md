@@ -1,6 +1,8 @@
 # Database design
 
-PostgreSQL holds every authoritative fact. Neo4j and Redis hold only derived or short-lived data, and both can be rebuilt or emptied without losing anything. The full DDL is in [`db/migrations/001_schema.sql`](../db/migrations/001_schema.sql).
+PostgreSQL holds every authoritative fact. Neo4j and Redis hold only derived or short-lived data, and both can be rebuilt or emptied without losing anything. The DDL is in [`db/migrations`](../db/migrations): [`001_schema.sql`](../db/migrations/001_schema.sql) creates the schema and [`002_team_analytics.sql`](../db/migrations/002_team_analytics.sql) evolves it with `ALTER` / `DROP` (see [Schema evolution](#schema-evolution-migration-002)).
+
+The full project report, with the attribute-level ER diagram, relational schema and data dictionary, is in [project-report.md](project-report.md).
 
 ## Entity–relationship model
 
@@ -33,7 +35,7 @@ erDiagram
 | `sessions` | `token_hash` | Stores the SHA-256 of the cookie token, never the token itself. |
 | `repositories` | `id` | `UNIQUE (source_type, source)`. CHECK that remote sources are `https://`. |
 | `analysis_jobs` | `id` | The job queue. A partial unique index allows one queued or running job per repository, and CHECKs keep the timestamps consistent with the status. |
-| `developers` | `id` | One identity per lower-cased e-mail per repository (`.mailmap` applied). |
+| `developers` | `id` | One identity per lower-cased e-mail per repository (`.mailmap` applied). `is_bot` is a **generated column** flagging bot accounts. |
 | `commits` | `id` | `UNIQUE (repository_id, sha)`, SHA format CHECK, `is_merge` is a **generated column**. |
 | `files` | `id` | `UNIQUE (repository_id, path)`. `exists_at_head` separates live files from deleted ones. |
 | `file_changes` | `(commit_id, file_id)` | Associative entity between commits and files. Line counts are NULL for binary files. A CHECK requires `old_path` for renames and copies. |
@@ -41,7 +43,7 @@ erDiagram
 | `coupling_edges` | `(file_a_id, file_b_id)` | An undirected pair stored once, enforced by `CHECK (file_a_id < file_b_id)`. Ratios are CHECKed to lie in [0, 1]. |
 | `file_ownership` | `(file_id, developer_id)` | Lines attributed by `git blame` at HEAD. |
 | `commit_embeddings` | `commit_id` | `vector(256)` with an **HNSW** index (`vector_cosine_ops`). |
-| `audit_log` | `id` | Who did what, with JSONB details. |
+| `audit_log` | `id` | Who did what, with JSONB details. `action` is CHECKed to be a snake_case identifier. |
 
 ### Normalisation
 
@@ -66,15 +68,26 @@ The schema is in third normal form. Aggregates such as revisions, churn, author 
 ## Views and functions
 
 - **`developer_activity`** gives commits, merges, insertions, deletions, first and last commit, and active days per developer.
-- **`file_hotspots`** gives revisions, distinct authors, churn and last change per file.
+- **`file_hotspots`** gives revisions, distinct (non-bot) authors, churn and last change per file.
 - **`monthly_activity`** (materialised) gives commits, active authors and churn per month. It is refreshed `CONCURRENTLY` after each analysis, which needs its unique index, so readers are never blocked.
 - **`bus_factor(repository_id)`** is the smallest number of developers who together own more than half of the blamed lines. It is computed with a running `sum() OVER (ORDER BY …)` window.
+- **`purge_expired_sessions(INOUT removed)`** is a stored procedure, `CALL`ed on every sign-in, that deletes expired sessions and returns how many it removed.
+
+### Team analytics (`GROUP BY … HAVING`)
+
+Two parameterised queries in `lib/queries.ts`, shown on the **Team analytics** tab and served by `report?kind=core` / `report?kind=shared`:
+
+- **Core contributors**: developers whose commit count is at least the repository's average, `HAVING count(*) >= (average from a subquery)`.
+- **Shared files**: files at HEAD changed by at least *N* different developers, `HAVING count(DISTINCT author_id) >= $2`.
+
+Both ignore merge commits and bot accounts.
 
 ## Indexes and the queries they serve
 
 | Index | Used by |
 |---|---|
 | `commits (repository_id, authored_at DESC)` | Recent commits, monthly activity |
+| `commits (author_id, authored_at DESC)` | Per-developer timelines and team analytics (replaced the single-column `commits (author_id)` in migration 002) |
 | GIN `to_tsvector('english', subject ‖ ' ' ‖ body)` | Full-text commit search with `websearch_to_tsquery`, `ts_rank` and `ts_headline` |
 | HNSW `commit_embeddings.embedding` | `ORDER BY embedding <=> $1` nearest-neighbour search |
 | `coupling_edges (repository_id, jaccard DESC)` | Coupling report sorted by strength |
@@ -90,6 +103,18 @@ The schema is in third normal form. Aggregates such as revisions, churn, author 
 - **Atomic re-analysis.** The worker deletes a repository's previous results and bulk-inserts the new ones (`INSERT … SELECT FROM unnest($1::…[], …)`, in chunks of 2,000 rows) inside **one transaction**. Readers see either the old analysis or the new one, never a mixture. A failure rolls back to the old one.
 - **Cancellation.** The API sets `status = 'cancelled'`. The worker checks between stages and throws away its uncommitted work.
 - **Registration.** `INSERT … ON CONFLICT DO NOTHING RETURNING` avoids a check-then-insert race on e-mail uniqueness.
+
+## Schema evolution (migration 002)
+
+`002_team_analytics.sql` changes the existing schema in place, so a database that already ran `001` upgrades without losing data:
+
+| Statement | Change |
+|---|---|
+| `ALTER TABLE developers ADD COLUMN is_bot … GENERATED ALWAYS AS (…) STORED` | Flags Dependabot, Renovate, GitHub Actions and other `[bot]` identities |
+| `ALTER TABLE audit_log ADD CONSTRAINT audit_log_action_format CHECK (…)` | Audit actions must be snake_case identifiers |
+| `DROP INDEX commits_author_idx` + `CREATE INDEX commits_author_time_idx` | Composite index replaces a single-column one |
+| `DROP VIEW file_hotspots` + `CREATE VIEW file_hotspots` | View now joins `developers` to exclude bots from author counts |
+| `CREATE PROCEDURE purge_expired_sessions` | Session housekeeping, called from `lib/auth.ts` |
 
 ## Change-coupling metrics
 
