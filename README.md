@@ -41,8 +41,47 @@ It was built as a DBMS project. PostgreSQL is the authoritative store, and most 
 - Node.js 22+
 - Git 2.30+ on the `PATH`
 - PostgreSQL 17 with the **pgvector** extension, Neo4j 5 and Redis 6+. `docker-compose.yml` starts all three. Native installs or hosted services also work: put their connection strings in `.env.local`.
+- For the quick start: Docker, `make` and `openssl`.
 
-## Setup
+## Quick start (Makefile)
+
+One command sets up whatever is missing and starts everything:
+
+```bash
+make
+```
+
+`make` (same as `make run`):
+
+1. installs npm dependencies if `node_modules` is missing or out of date;
+2. creates `.env.local` from `.env.example` with random passwords, if it does not exist;
+3. starts PostgreSQL, Neo4j and Redis in Docker and waits until they are healthy;
+4. applies migrations, creates the admin account, sets up Neo4j and creates the demo repository (each step is skipped if already done);
+5. prints the admin login and starts the web app on http://localhost:3000 and the analysis worker. **Ctrl+C** stops both.
+
+If your default `node` is older than 22, the Makefile runs everything through Node 22 via `npx`, so there is no need to switch versions.
+
+| Command | What it does |
+|---|---|
+| `make` / `make run` | Set up whatever is missing, then start web app + worker |
+| `make setup` | First-time setup only (does not start the app) |
+| `make dev` | Start web app + worker (assumes setup is done) |
+| `make web` / `make worker` | Start only one of them |
+| `make test` | Recreate the test database and run all tests |
+| `make test-unit` | Unit tests only (no databases needed) |
+| `make typecheck` | TypeScript check |
+| `make build` / `make start` | Production build / serve it |
+| `make db-up` / `make db-down` | Start / stop the Docker databases (data is kept) |
+| `make db-logs` | Follow the database logs |
+| `make reset` | **Wipe** the dev database, re-migrate and re-create the admin |
+| `make clean` | Remove `.next` and analysis workspaces |
+| `make help` | List every target |
+
+The admin login is `ADMIN_EMAIL` / `ADMIN_PASSWORD` from `.env.local`, and `make` prints it when it starts.
+
+## Manual setup (npm)
+
+Use this instead of the Makefile if you prefer running each step yourself.
 
 ```bash
 npm install
@@ -122,4 +161,5 @@ workers/            analysis worker
 scripts/            migrate, reset, seed, neo4j-init, fixture repository
 tests/              unit and integration tests
 docs/               database design
+Makefile            one-command setup and run (`make`)
 ```
