@@ -10,6 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { analyzeRepository } from "@/lib/analysis/pipeline";
 import { embed, toPgVector } from "@/lib/analysis/embedding";
 import { migrate } from "@/lib/migrate";
+import { CORE_CONTRIBUTORS_SQL, SHARED_FILES_SQL } from "@/lib/queries";
 import type { Env } from "@/lib/env";
 import { AUTHORS, FIXTURE_COMMITS, createFixtureRepo } from "@/scripts/fixture-repo";
 
@@ -145,6 +146,54 @@ describe.skipIf(!reachable)("analysis pipeline (PostgreSQL)", () => {
         WHERE c.repository_id = $1 ORDER BY e.embedding <=> $2::vector LIMIT 1`,
       [repoId, toPgVector(embed("put endpoint API test")!)]);
     expect(near.subject).toBe("Add put endpoint to API with test");
+  });
+
+  it("finds core contributors and shared files with GROUP BY … HAVING, ignoring bots", async () => {
+    // Alice 5 commits, Bob 4, Carol 3: the average is 4.
+    const core = (await pool.query(CORE_CONTRIBUTORS_SQL, [repoId])).rows;
+    expect(core.map((r) => [r.name, r.commits])).toEqual([[AUTHORS.alice.name, 5], [AUTHORS.bob.name, 4]]);
+    expect(core[0].avg_commits).toBeCloseTo(4);
+    expect(core[0].share).toBeCloseTo(5 / FIXTURE_COMMITS);
+
+    const shared = (await pool.query(SHARED_FILES_SQL, [repoId, 3])).rows;
+    expect(shared[0]).toMatchObject({ path: "src/api.ts", authors: 3 });
+    expect(shared.every((r) => r.authors >= 3)).toBe(true);
+
+    // A bot with many commits is flagged by the generated column and changes neither report.
+    const bot = await one<{ id: number; is_bot: boolean }>(
+      `INSERT INTO developers (repository_id, email, name)
+       VALUES ($1, '49699333+dependabot[bot]@users.noreply.github.com', 'dependabot[bot]')
+       RETURNING id::int, is_bot`, [repoId]);
+    expect(bot.is_bot).toBe(true);
+    await pool.query(
+      `INSERT INTO commits (repository_id, sha, author_id, authored_at, committed_at, parent_count, subject)
+       SELECT $1, lpad(to_hex(n), 40, 'f'), $2, now(), now(), 1, 'Bump dependency'
+         FROM generate_series(1, 20) AS n`, [repoId, bot.id]);
+    const coreAfter = (await pool.query(CORE_CONTRIBUTORS_SQL, [repoId])).rows;
+    expect(coreAfter.map((r) => r.name)).toEqual([AUTHORS.alice.name, AUTHORS.bob.name]);
+    const human = await one<{ n: number }>(
+      "SELECT count(*)::int AS n FROM developers WHERE repository_id = $1 AND NOT is_bot", [repoId]);
+    expect(human.n).toBe(3);
+  });
+
+  it("applies schema change 002: ALTER constraints, replaced index and the stored procedure", async () => {
+    await expect(pool.query("INSERT INTO audit_log (action) VALUES ('Bad Action!')"))
+      .rejects.toMatchObject({ code: "23514" });
+
+    const idx = (await pool.query(
+      "SELECT indexname FROM pg_indexes WHERE tablename = 'commits' AND indexname LIKE 'commits_author%'")).rows;
+    expect(idx.map((r) => r.indexname)).toEqual(["commits_author_time_idx"]);
+
+    const u = await one<{ id: number }>(
+      "INSERT INTO users (email, display_name, password_hash) VALUES ('s@example.com', 'S', 'x') RETURNING id::int");
+    await pool.query(
+      `INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES
+         ('expired', $1, now() - interval '2 days', now() - interval '1 day'),
+         ('live',    $1, now(),                     now() + interval '1 day')`, [u.id]);
+    const purge = await one<{ removed: number }>("CALL purge_expired_sessions()");
+    expect(purge.removed).toBe(1);
+    const left = (await pool.query("SELECT token_hash FROM sessions WHERE user_id = $1", [u.id])).rows;
+    expect(left.map((r) => r.token_hash)).toEqual(["live"]);
   });
 
   it("replaces, rather than duplicates, data on re-analysis", async () => {
