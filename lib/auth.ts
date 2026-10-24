@@ -44,7 +44,7 @@ export async function startSession(userId: number): Promise<void> {
     [sha256(token), userId, hours],
   );
   // opportunistic clean-up of expired sessions
-  await query("DELETE FROM sessions WHERE expires_at < now()");
+  await query("CALL purge_expired_sessions()");
   (await cookies()).set(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
