@@ -12,6 +12,7 @@ const TABS = [
   ["developers", "Developers"],
   ["hotspots", "Hotspots"],
   ["coupling", "Change coupling"],
+  ["team", "Team analytics"],
   ["commits", "Commits"],
   ["graph", "Knowledge graph"],
   ["jobs", "Jobs"],
@@ -70,6 +71,7 @@ export default async function RepositoryPage({ params, searchParams }: Props) {
       {tab === "developers" && <Developers id={id} />}
       {tab === "hotspots" && <Hotspots id={id} />}
       {tab === "coupling" && <Coupling id={id} min={sp.min} />}
+      {tab === "team" && <Team id={id} minAuthors={sp.authors} />}
       {tab === "commits" && <Commits id={id} text={sp.q} mode={sp.mode} />}
       {tab === "graph" && <Graph id={id} />}
       {tab === "jobs" && <Jobs jobs={jobs} />}
@@ -242,6 +244,73 @@ async function Coupling({ id, min }: { id: number; min?: string }) {
         </table>
       )}
     </section>
+  );
+}
+
+async function Team({ id, minAuthors }: { id: number; minAuthors?: string }) {
+  const min = Math.min(Math.max(Math.trunc(Number(minAuthors ?? 2)) || 2, 1), 1000);
+  const [core, shared] = await Promise.all([q.coreContributors(id), q.sharedFiles(id, min)]);
+  return (
+    <div className="space-y-5">
+      <section className="card overflow-x-auto">
+        <h2 className="mb-1">Core contributors</h2>
+        <p className="mb-3 text-xs text-slate-500">
+          Developers with at least the average number of commits per developer
+          {core[0] && ` (${core[0].avg_commits.toFixed(1)})`}. Bots are excluded.
+        </p>
+        {core.length === 0 ? (
+          <p className="text-sm text-slate-500">No data yet.</p>
+        ) : (
+          <table className="table">
+            <thead>
+              <tr><th>Developer</th><th className="num">Commits</th><th className="num">Share of commits</th></tr>
+            </thead>
+            <tbody>
+              {core.map((d) => (
+                <tr key={d.developer_id}>
+                  <td>{d.name}<div className="text-xs text-slate-500">{d.email}</div></td>
+                  <td className="num">{fmtInt(d.commits)}</td>
+                  <td className="num">{fmtPct(d.share)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+      <section className="card overflow-x-auto">
+        <form className="mb-3 flex flex-wrap items-end gap-3 text-sm">
+          <input type="hidden" name="tab" value="team" />
+          <div>
+            <label className="label" htmlFor="authors">Minimum authors</label>
+            <input className="input w-28" id="authors" name="authors" type="number" step="1" min="1" defaultValue={min} />
+          </div>
+          <button className="btn-secondary">Filter</button>
+          <p className="text-slate-500">
+            Shared files: files at HEAD changed by at least this many different developers. Changes to them
+            need the most coordination.
+          </p>
+        </form>
+        {shared.length === 0 ? (
+          <p className="text-sm text-slate-500">No files with that many authors.</p>
+        ) : (
+          <table className="table">
+            <thead>
+              <tr><th>File</th><th className="num">Authors</th><th className="num">Revisions</th><th className="num">Churn (lines)</th></tr>
+            </thead>
+            <tbody>
+              {shared.map((f) => (
+                <tr key={f.file_id}>
+                  <td className="font-mono text-xs"><Link href={`/repositories/${id}/files/${f.file_id}`}>{f.path}</Link></td>
+                  <td className="num">{fmtInt(f.authors)}</td>
+                  <td className="num">{fmtInt(f.revisions)}</td>
+                  <td className="num">{fmtInt(f.churn)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+    </div>
   );
 }
 

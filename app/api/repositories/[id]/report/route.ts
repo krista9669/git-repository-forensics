@@ -6,6 +6,7 @@ type Ctx = { params: Promise<{ id: string }> };
 /**
  * GET /api/repositories/:id/report?kind=...
  *   summary | monthly | developers | hotspots | coupling[&minJaccard=0.3]
+ *   shared[&minAuthors=2] | core   team analytics (GROUP BY … HAVING)
  *   commits[&q=text]   full-text search (recent commits without q)
  *   similar&q=text     pgvector similarity on commit messages
  *   collaboration | silos   (Neo4j)
@@ -26,6 +27,12 @@ export const GET = route<Ctx>(async (req, { params }) => {
       if (!(min >= 0 && min <= 1)) throw new HttpError(400, "minJaccard must be between 0 and 1.");
       return json(await q.coupling(id, min));
     }
+    case "shared": {
+      const min = Number(sp.get("minAuthors") ?? 2);
+      if (!(Number.isInteger(min) && min >= 1 && min <= 1000)) throw new HttpError(400, "minAuthors must be an integer from 1 to 1000.");
+      return json(await q.sharedFiles(id, min));
+    }
+    case "core": return json(await q.coreContributors(id));
     case "commits": return json(text ? await q.searchCommits(id, text) : await q.recentCommits(id));
     case "similar":
       if (!text) throw new HttpError(400, "q is required.");

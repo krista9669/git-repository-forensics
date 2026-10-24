@@ -188,6 +188,69 @@ export const coupling = (repoId: number, minJaccard = 0, limit = 100) =>
   );
 
 // ---------------------------------------------------------------------------
+// Team analytics (GROUP BY … HAVING)
+// ---------------------------------------------------------------------------
+export type SharedFileRow = { file_id: number; path: string; authors: number; revisions: number; churn: number };
+
+/**
+ * Files at HEAD changed by at least $2 different (human) developers: shared
+ * code where changes need coordination. Merge commits are not counted.
+ */
+export const SHARED_FILES_SQL = `
+  SELECT f.id::int AS file_id, f.path,
+         count(DISTINCT c.author_id)::int                  AS authors,
+         count(*)::int                                     AS revisions,
+         COALESCE(sum(fc.insertions + fc.deletions), 0)::int AS churn
+    FROM file_changes fc
+    JOIN commits c    ON c.id = fc.commit_id
+    JOIN developers d ON d.id = c.author_id
+    JOIN files f      ON f.id = fc.file_id
+   WHERE f.repository_id = $1 AND f.exists_at_head AND NOT c.is_merge AND NOT d.is_bot
+   GROUP BY f.id
+  HAVING count(DISTINCT c.author_id) >= $2
+   ORDER BY authors DESC, revisions DESC, f.path
+   LIMIT 100`;
+
+export const sharedFiles = (repoId: number, minAuthors = 2) =>
+  cached(key(repoId, `shared:${minAuthors}`), TTL, () => query<SharedFileRow>(SHARED_FILES_SQL, [repoId, minAuthors]));
+
+export type CoreContributorRow = {
+  developer_id: number;
+  name: string;
+  email: string;
+  commits: number;
+  share: number;
+  avg_commits: number;
+};
+
+/**
+ * Core contributors: (human) developers with at least the average number of
+ * commits per developer. The average comes from a subquery over the same
+ * repository; `share` is the developer's fraction of all human commits.
+ */
+export const CORE_CONTRIBUTORS_SQL = `
+  WITH human AS (
+    SELECT c.author_id FROM commits c JOIN developers d ON d.id = c.author_id
+     WHERE c.repository_id = $1 AND NOT d.is_bot
+  ), average AS (
+    SELECT avg(n)::float AS avg_commits
+      FROM (SELECT count(*) AS n FROM human GROUP BY author_id) per_dev
+  )
+  SELECT d.id::int AS developer_id, d.name, d.email,
+         count(*)::int                                     AS commits,
+         (count(*)::float / (SELECT count(*) FROM human))  AS share,
+         a.avg_commits
+    FROM human h
+    JOIN developers d ON d.id = h.author_id
+   CROSS JOIN average a
+   GROUP BY d.id, a.avg_commits
+  HAVING count(*) >= a.avg_commits
+   ORDER BY commits DESC, d.name`;
+
+export const coreContributors = (repoId: number) =>
+  cached(key(repoId, "core"), TTL, () => query<CoreContributorRow>(CORE_CONTRIBUTORS_SQL, [repoId]));
+
+// ---------------------------------------------------------------------------
 // Single file
 // ---------------------------------------------------------------------------
 export function getFile(repoId: number, fileId: number) {
