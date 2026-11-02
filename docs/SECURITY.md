@@ -148,12 +148,12 @@ Potential enhancements include:
 
 Before running or demonstrating the application:
 
-- [ ] `.env.local` is not committed.
-- [ ] All placeholder secrets have been replaced.
-- [ ] Database services use non-default credentials.
-- [ ] Administrator credentials are kept private.
-- [ ] Remote repository URL validation is enabled.
-- [ ] Local repository access is restricted to the configured root.
-- [ ] Protected API routes enforce authentication and authorization.
-- [ ] Git commands do not interpolate untrusted input into a shell.
-- [ ] Tests for database constraints and administrator protection pass.
+- [X] `.env.local` is not committed.
+- [X] All placeholder secrets have been replaced.
+- [X] Database services use non-default credentials.
+- [X] Administrator credentials are kept private.
+- [X] Remote repository URL validation is enabled.
+- [X] Local repository access is restricted to the configured root.
+- [X] Protected API routes enforce authentication and authorization.
+- [X] Git commands do not interpolate untrusted input into a shell.
+- [X] Tests for database constraints and administrator protection pass.
